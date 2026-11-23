@@ -135,7 +135,7 @@ def transcribe(path: Path, preference: str):
         language=language,
         task="transcribe",
         vad_filter=True,
-        word_timestamps=False,
+        word_timestamps=True,
         beam_size=1,
         condition_on_previous_text=False,
     )
@@ -149,7 +149,15 @@ def transcribe(path: Path, preference: str):
                     "start": float(seg.start),
                     "end": float(seg.end),
                     "text": text,
-                    "words": [],
+                    "words": [
+                        {
+                            "start": float(word.start),
+                            "end": float(word.end),
+                            "text": clean_caption(word.word),
+                        }
+                        for word in (seg.words or [])
+                        if word.start is not None and word.end is not None
+                    ],
                 }
             )
 
@@ -257,20 +265,62 @@ def srt_time(seconds: float) -> str:
 
 
 def write_srt(segments, start: float, end: float, target: Path):
-    """Create readable, short caption cards with approximate phrase timing."""
+    """Write captions using Whisper word timings, with a safe phrase-timing fallback."""
     lines = []
     index = 1
 
+    def add_caption(text: str, caption_start: float, caption_end: float):
+        nonlocal index
+        text = clean_caption(text)
+        caption_start = max(start, caption_start)
+        caption_end = min(end, caption_end)
+        if not text or caption_end <= caption_start:
+            return
+        lines.extend([
+            str(index),
+            f"{srt_time(caption_start - start)} --> {srt_time(caption_end - start)}",
+            text,
+            "",
+        ])
+        index += 1
+
     for seg in segments:
-        clip_start = max(start, seg["start"])
-        clip_end = min(end, seg["end"])
-        if clip_end <= clip_start:
+        seg_start = max(start, seg["start"])
+        seg_end = min(end, seg["end"])
+        if seg_end <= seg_start:
             continue
 
+        words = [
+            word for word in (seg.get("words") or [])
+            if word.get("end", 0) > start and word.get("start", 0) < end
+            and word.get("text")
+        ]
+
+        if words:
+            group = []
+            group_chars = 0
+            for word in words:
+                token = word["text"]
+                if group and (len(group) >= 4 or group_chars + len(token) > 30):
+                    add_caption(
+                        "".join(item["text"] for item in group),
+                        group[0]["start"],
+                        group[-1]["end"],
+                    )
+                    group = []
+                    group_chars = 0
+                group.append(word)
+                group_chars += len(token)
+            if group:
+                add_caption(
+                    "".join(item["text"] for item in group),
+                    group[0]["start"],
+                    group[-1]["end"],
+                )
+            continue
+
+        # Fallback for segments where the recognizer did not return word timings.
         caption = clean_caption(seg["text"])
-        if not caption:
-            continue
-
         tokens = caption.split()
         chunks = []
         current = []
@@ -288,21 +338,15 @@ def write_srt(segments, start: float, end: float, target: Path):
             chunks.append(" ".join(current))
 
         weights = [max(len(chunk), 1) for chunk in chunks]
-        total_weight = sum(weights)
-        span = clip_end - clip_start
+        total_weight = sum(weights) or 1
+        span = seg_end - seg_start
         elapsed = 0.0
         for chunk, weight in zip(chunks, weights):
             phrase_duration = span * weight / total_weight
-            phrase_start = clip_start + elapsed
-            phrase_end = min(clip_end, phrase_start + phrase_duration)
-            lines.extend([
-                str(index),
-                f"{srt_time(phrase_start - start)} --> {srt_time(phrase_end - start)}",
-                chunk,
-                "",
-            ])
+            phrase_start = seg_start + elapsed
+            phrase_end = min(seg_end, phrase_start + phrase_duration)
+            add_caption(chunk, phrase_start, phrase_end)
             elapsed += phrase_duration
-            index += 1
 
     target.write_text("\n".join(lines), encoding="utf-8-sig")
 
