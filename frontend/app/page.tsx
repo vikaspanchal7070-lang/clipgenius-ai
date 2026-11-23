@@ -63,6 +63,35 @@ export default function Home() {
     );
   }
 
+  async function importDirectUrl() {
+    if (!youtubeUrl.trim()) {
+      setMessage("Paste a direct HTTPS MP4, MOV or M4V video URL first.");
+      return;
+    }
+
+    setBusy(true);
+    setMessage("Importing video from the authorized direct URL…");
+    setClips([]);
+
+    try {
+      const r = await fetch(`${API}/api/import-url`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: youtubeUrl.trim() }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw Error(d.detail || "Could not import this video URL.");
+      setJobId(d.job_id);
+      setFile(null);
+      setProgress(0);
+      setMessage("Video imported successfully. Choose your settings and click Generate AI Shorts.");
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Video URL import failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function upload() {
     if (!file) {
       setMessage("Choose an MP4 or MOV file first.");
@@ -336,7 +365,7 @@ export default function Home() {
                   setPreviewId("");
                   setPermissionConfirmed(false);
                 }}
-                placeholder="Paste a YouTube video URL"
+                placeholder="Paste a YouTube URL or direct MP4/MOV link"
               />
 
               <button
@@ -345,6 +374,15 @@ export default function Home() {
                 onClick={previewYouTube}
               >
                 Preview video
+              </button>
+
+              <button
+                className="secondary"
+                type="button"
+                onClick={importDirectUrl}
+                disabled={busy}
+              >
+                Import direct video URL
               </button>
 
               <small>
