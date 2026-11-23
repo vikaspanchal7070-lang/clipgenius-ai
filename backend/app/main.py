@@ -165,6 +165,15 @@ def transcribe(path: Path, preference: str):
     return segments, detected_language
 
 
+def release_whisper_model():
+    """Release the cached Whisper model before FFmpeg rendering on low-memory hosts."""
+    global MODEL
+    with MODEL_LOCK:
+        MODEL = None
+    import gc
+    gc.collect()
+
+
 HOOK_TERMS = {
     "secret", "mistake", "important", "why", "how", "never", "always",
     "best", "worst", "truth", "learn", "tip", "reason", "problem",
@@ -447,6 +456,9 @@ def process_job(job_id: str, count: int, duration: int, language: str):
 
         total_duration = probe_duration(source)
         segments, detected = transcribe(source, language)
+        # Whisper is no longer needed once transcript timestamps are in memory.
+        # Free its native model allocations before launching FFmpeg.
+        release_whisper_model()
 
         if not segments:
             raise RuntimeError(
