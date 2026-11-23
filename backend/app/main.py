@@ -21,7 +21,7 @@ app.add_middleware(
 )
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 FRONTEND_DIR = BASE.parent / "frontend" / "out"
-
+app.mount("/_next", StaticFiles(directory=str(FRONTEND_DIR / "_next")), name="next-static")
 JOBS: dict[str, dict[str, Any]] = {}
 MODEL = None
 MODEL_LOCK = threading.Lock()
