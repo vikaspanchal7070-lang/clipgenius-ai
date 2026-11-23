@@ -6,6 +6,23 @@ const API = process.env.NEXT_PUBLIC_API_URL || "";
 type Clip = {name:string;url:string;start_seconds:number;duration_seconds:number;score:number;transcript_preview:string};
 export default function Home(){
  const [file,setFile]=useState<File|null>(null),[jobId,setJobId]=useState(""),[count,setCount]=useState("5"),[duration,setDuration]=useState("30"),[language,setLanguage]=useState("auto"),[busy,setBusy]=useState(false),[message,setMessage]=useState(""),[clips,setClips]=useState<Clip[]>([]),[tab,setTab]=useState<"upload"|"youtube">("upload"),[youtubeUrl,setYoutubeUrl]=useState(""),[progress,setProgress]=useState(0),[detected,setDetected]=useState("");
+ const [previewId, setPreviewId] = useState("");
+const [permissionConfirmed, setPermissionConfirmed] = useState(false);
+
+function previewYouTube() {
+  const match = youtubeUrl.trim().match(
+    /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{11})/
+  );
+
+  if (!match) {
+    setPreviewId("");
+    setMessage("Please enter a valid YouTube video link.");
+    return;
+  }
+
+  setPreviewId(match[1]);
+  setMessage("Video preview loaded. Upload an authorized MP4 source to create Shorts.");
+}
  async function upload(){if(!file){setMessage("Choose an MP4 or MOV file first.");return}setBusy(true);setMessage("Uploading video…");setClips([]);try{const fd=new FormData();fd.append("file",file);const r=await fetch(`${API}/api/upload`,{method:"POST",body:fd});const d=await r.json();if(!r.ok)throw Error(d.detail||"Upload failed");setJobId(d.job_id);setMessage("Upload complete. Ready to generate.");}catch(e){setMessage(e instanceof Error?e.message:"Upload failed")}finally{setBusy(false)}}
  async function generate(){if(!jobId){setMessage("Upload your video first.");return}setBusy(true);setClips([]);setProgress(2);setMessage("Starting transcription and clip analysis…");try{const r=await fetch(`${API}/api/jobs/${jobId}/generate?count=${count}&duration=${duration}&language=${language}`,{method:"POST"});const d=await r.json();if(!r.ok)throw Error(d.detail||"Could not start job");let done=false;while(!done){await new Promise(res=>setTimeout(res,2500));const sr=await fetch(`${API}/api/jobs/${jobId}`);const st=await sr.json();setProgress(st.progress||0);setMessage(st.message||st.status);if(st.detected_language)setDetected(st.detected_language);if(st.status==="completed"){setClips(st.clips||[]);setMessage(st.note||"Clips ready.");done=true}else if(st.status==="failed"){throw Error(st.error||"Processing failed");}}}catch(e){setMessage(e instanceof Error?e.message:"Processing failed")}finally{setBusy(false)}}
  return <main><nav className="nav wrap"><a className="brand" href="#"><span className="brand-mark"><Play size={19} fill="currentColor"/></span><span>ClipGenius <b>AI</b></span></a><div className="navlinks"><a href="#how">How it works</a><a href="#features">Features</a><a href="#studio">Studio</a></div><a className="nav-cta" href="#studio"><Sparkles size={16}/> Open Studio</a></nav>
