@@ -65,18 +65,34 @@ def choose_language(preference: str, detected: str | None) -> str | None:
     return None
 
 def transcribe(path: Path, preference: str):
+def transcribe(path: Path, preference: str):
     model = get_whisper_model()
     lang = choose_language(preference, None)
+
     segments_iter, info = model.transcribe(
-    str(path),
-    language=lang,
-    task="transcribe",
-    vad_filter=True,
-    word_timestamps=False,
-    beam_size=1,
-    condition_on_previous_text=False,
-    cpu_threads=1,
-    num_workers=1
+        str(path),
+        language=lang,
+        task="transcribe",
+        vad_filter=True,
+        word_timestamps=False,
+        beam_size=1,
+        condition_on_previous_text=False,
+        cpu_threads=1,
+        num_workers=1
+    )
+
+    segments = []
+    for seg in segments_iter:
+        text = clean_caption(seg.text)
+        if text:
+            segments.append({
+                "start": float(seg.start),
+                "end": float(seg.end),
+                "text": text,
+                "words": []
+            })
+
+    return segments, getattr(info, "language", "unknown")
 )
     )
     segments = []
