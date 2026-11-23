@@ -29,7 +29,70 @@ function previewYouTube() {
  <section className="hero wrap"><div className="hero-copy"><div className="eyebrow"><Sparkles size={15}/> AI-POWERED VIDEO REPURPOSING</div><h1>Turn long videos into <span>scroll-stopping shorts.</span></h1><p className="lead">Upload a video and create vertical clips for YouTube Shorts, Instagram Reels and TikTok — all from one simple workspace.</p><div className="checks"><span><CheckCircle2/> AI clip ranking</span><span><CheckCircle2/> Multilingual captions</span><span><CheckCircle2/> Vertical export</span></div><a className="primary" href="#studio"><WandSparkles size={18}/> Create your shorts →</a><p className="micro">Early MVP · MP4 upload · Hindi, English and Hinglish workflow</p></div><div className="hero-art"><div className="glow"></div><div className="video-window"><div className="window-top"><span></span><span></span><span></span><label>CLIPGENIUS STUDIO</label></div><div className="video-scene"><div className="play-circle"><Play fill="currentColor"/></div><div className="scene-caption">YOUR NEXT <b>GREAT CLIP</b></div><div className="time">AI VIDEO</div></div><div className="timeline"><i></i><i></i><i></i><i></i><i></i></div></div><div className="floating-card"><span className="float-icon"><Zap/></span><div><b>Smart clip workflow</b><small>Transcribe · Rank · Export</small></div><span className="live-dot"></span></div><div className="vertical-card"><div className="vertical-screen"><span className="tag">9:16</span><div className="bars"><i/><i/><i/></div><b>SHORT<br/>FORM<br/><em>READY</em></b><small>CAPTIONS INCLUDED</small></div></div></div></section>
  <section className="trust wrap"><span>BUILT FOR</span><b>▶ YouTube Shorts</b><b>◎ Instagram Reels</b><b>▷ TikTok</b><b>f Facebook Reels</b></section>
  <section className="studio-section wrap" id="studio"><div className="section-heading"><div><div className="eyebrow">YOUR CREATIVE WORKSPACE</div><h2>Make your first <span>shorts.</span></h2><p>Upload a video you own or have permission to process. The engine transcribes speech, ranks moments and renders vertical clips.</p></div><div className="studio-status"><i/> PROCESSING ENGINE</div></div><div className="studio"><div className="studio-top"><div className="studio-title"><span className="mini-mark"><Film/></span><div><b>New video project</b><small>MP4 upload · Whisper transcription · FFmpeg export</small></div></div><span className="step">STEP 01 / 03</span></div><div className="tabs"><button className={tab==="upload"?"active":""} onClick={()=>setTab("upload")}><UploadCloud/> Upload video</button><button className={tab==="youtube"?"active":""} onClick={()=>setTab("youtube")}><Link2/> YouTube URL</button></div>
- {tab==="upload"?<label className="dropzone"><input type="file" accept="video/mp4,video/quicktime,.m4v" onChange={e=>setFile(e.target.files?.[0]||null)}/><span className="upload-icon"><UploadCloud/></span><b>{file?file.name:"Drop your video here, or browse"}</b><small>{file?`${(file.size/1024/1024).toFixed(1)} MB selected`:"MP4, MOV or M4V · Select a file from your device"}</small><span className="browse">Browse files</span></label>:<div className="url-panel"><Link2/><input value={youtubeUrl} onChange={e=>setYoutubeUrl(e.target.value)} placeholder="Paste a YouTube video URL"/><small>YouTube import is not connected yet. Use MP4 upload for this release.</small></div>}
+ {tab==="upload"?<label className="dropzone"><input type="file" accept="video/mp4,video/quicktime,.m4v" onChange={e=>setFile(e.target.files?.[0]||null)}/><span className="upload-icon"><UploadCloud/></span><b>{file?file.name:"Drop your video here, or browse"}</b><small>{file?`${(file.size/1024/1024).toFixed(1)} MB selected`:"MP4, MOV or M4V · Select a file from your device"}</small><span className="browse">Browse files</span></label>:
+<div className="url-panel">
+  <Link2 />
+  <input
+    value={youtubeUrl}
+    onChange={e => {
+      setYoutubeUrl(e.target.value);
+      setPreviewId("");
+    }}
+    placeholder="Paste a YouTube video URL"
+  />
+
+  <button className="secondary" type="button" onClick={previewYouTube}>
+    Preview video
+  </button>
+
+  <small>
+    Preview your YouTube video. Upload an authorized MP4 source to generate Shorts.
+  </small>
+
+  {previewId && (
+    <>
+      <div style={{
+        position: "relative",
+        paddingBottom: "56.25%",
+        height: 0,
+        overflow: "hidden",
+        width: "100%",
+        marginTop: 16
+      }}>
+        <iframe
+          title="YouTube video preview"
+          src={`https://www.youtube-nocookie.com/embed/${previewId}`}
+          allowFullScreen
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            border: 0
+          }}
+        />
+      </div>
+
+      <label style={{display:"flex", gap:10, marginTop:16}}>
+        <input
+          type="checkbox"
+          checked={permissionConfirmed}
+          onChange={e => setPermissionConfirmed(e.target.checked)}
+        />
+        I confirm I have permission to edit and reuse this video.
+      </label>
+
+      <button
+        className="primary"
+        type="button"
+        disabled={!permissionConfirmed}
+        onClick={() => setTab("upload")}
+      >
+        Continue to video upload
+      </button>
+    </>
+  )}
+</div>
  <div className="settings"><label><span><Layers3/> Number of shorts</span><select value={count} onChange={e=>setCount(e.target.value)}>{["1","3","5","10","15","20"].map(v=><option key={v}>{v}</option>)}</select></label><label><span><Scissors/> Clip duration</span><select value={duration} onChange={e=>setDuration(e.target.value)}>{["15","30","45","60","90"].map(v=><option key={v}>{v}</option>)}</select></label><label><span><Smartphone/> Aspect ratio</span><div className="static-select">9:16 · Portrait</div></label><label><span><Captions/> Caption language</span><select value={language} onChange={e=>setLanguage(e.target.value)}><option value="auto">Auto detect</option><option value="hi">Hindi</option><option value="en">English</option><option value="hinglish">Hinglish</option></select></label></div>
  <div className="actions"><button className="secondary" onClick={upload} disabled={busy||!file}><UploadCloud size={17}/> Upload video</button><button className="primary generate" onClick={generate} disabled={busy||!jobId}><WandSparkles size={17}/>{busy?"Processing…":"Generate AI Shorts"}{busy&&<Loader2 className="spin" size={16}/>}</button></div>
  {message&&<div className="notice">{message}{busy&&<div className="progress"><div style={{width:`${progress}%`}}/></div>}{detected&&<small> Detected speech language: {detected}</small>}</div>}
