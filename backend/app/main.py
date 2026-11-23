@@ -138,8 +138,6 @@ def transcribe(path: Path, preference: str):
         word_timestamps=False,
         beam_size=1,
         condition_on_previous_text=False,
-        cpu_threads=1,
-        num_workers=1,
     )
 
     segments = []
