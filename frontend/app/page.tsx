@@ -458,7 +458,7 @@ export default function Home() {
                 value={count}
                 onChange={(e) => setCount(e.target.value)}
               >
-                {["1", "3", "5", "10", "15", "20"].map((v) => (
+                {["5", "6", "7", "8", "9", "10"].map((v) => (
                   <option key={v}>{v}</option>
                 ))}
               </select>
@@ -537,7 +537,7 @@ export default function Home() {
                 <div>
                   <b>Your generated clips</b>
                   <small>
-                    Transcript-ranked moments · captioned MP4 exports
+                    AI-ranked moments · phrase captions · 9:16 MP4 exports
                   </small>
                 </div>
                 <span>{clips.length} READY</span>
@@ -573,8 +573,8 @@ export default function Home() {
             One video. <span>Multiple stories.</span>
           </h2>
           <p>
-            Open-source transcription and video processing power the first
-            release.
+            Whisper finds promising speech moments, then FFmpeg creates
+            captioned portrait clips for review and download.
           </p>
         </div>
 
@@ -583,8 +583,8 @@ export default function Home() {
             <div className="feature-icon"><Sparkles /></div>
             <h3>Transcript-based highlights</h3>
             <p>
-              Rank speech segments using keyword, pacing and engagement
-              heuristics.
+              Score transcript windows using speech density, hook words,
+              questions and pacing cues.
             </p>
             <small>EARLY AI ENGINE</small>
           </article>
