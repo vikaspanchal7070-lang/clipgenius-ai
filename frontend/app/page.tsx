@@ -21,6 +21,26 @@ import {
 
 const API = process.env.NEXT_PUBLIC_API_URL || "";
 
+async function readApiJson(response: Response) {
+  const contentType = response.headers.get("content-type") || "";
+  const body = await response.text();
+
+  if (!contentType.toLowerCase().includes("application/json")) {
+    const routeHint = response.status === 404
+      ? " API route was not found."
+      : " The server may be serving the website page instead of the API.";
+    throw new Error(
+      `API returned non-JSON content (HTTP ${response.status}).${routeHint} Check that the latest Render deployment is live and the API URL is correct.`
+    );
+  }
+
+  try {
+    return body ? JSON.parse(body) : {};
+  } catch {
+    throw new Error(`API returned invalid JSON (HTTP ${response.status}). Please retry after checking the server logs.`);
+  }
+}
+
 type Clip = {
   name: string;
   url: string;
@@ -80,7 +100,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: youtubeUrl.trim() }),
       });
-      const d = await r.json();
+      const d = await readApiJson(r);
       if (!r.ok) throw Error(d.detail || "Could not import this video URL.");
       setJobId(d.job_id);
       setFile(null);
@@ -112,7 +132,7 @@ export default function Home() {
         body: fd,
       });
 
-      const d = await r.json();
+      const d = await readApiJson(r);
 
       if (!r.ok) throw Error(d.detail || "Upload failed");
 
@@ -142,7 +162,7 @@ export default function Home() {
         { method: "POST" }
       );
 
-      const d = await r.json();
+      const d = await readApiJson(r);
 
       if (!r.ok) throw Error(d.detail || "Could not start job");
 
@@ -152,7 +172,7 @@ export default function Home() {
         await new Promise((res) => setTimeout(res, 2500));
 
         const sr = await fetch(`${API}/api/jobs/${jobId}`);
-        const st = await sr.json();
+        const st = await readApiJson(sr);
 
         setProgress(st.progress || 0);
         setMessage(st.message || st.status);
