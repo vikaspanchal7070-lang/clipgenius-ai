@@ -375,10 +375,9 @@ def face_reframe_crop_x(source: Path, start: float, end: float) -> int | None:
 
         width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
         if width <= 0 or height <= 0 or width / height <= 9 / 16:
             capture.release()
-            return 0
+            return None
 
         classifier = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
