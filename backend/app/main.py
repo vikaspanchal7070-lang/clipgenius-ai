@@ -333,7 +333,7 @@ def render_clip(
 
     subtitle_filter = (
         f"subtitles='{escape_filter_path(srt_path)}':"
-        "force_style='FontName=Arial,FontSize=18,"
+        "force_style='FontName=Noto Sans Devanagari,FontSize=18,"
         "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
         "BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=100'"
     )
