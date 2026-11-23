@@ -432,6 +432,82 @@ def homepage():
     return FileResponse(index_file)
 
 
+@app.post("/api/import-url")
+def import_video_url(payload: dict[str, str]):
+    """Import a direct video file URL from an authorized source."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse, unquote
+    import requests
+
+    source_url = (payload.get("url") or "").strip()
+    if not source_url or len(source_url) > 2048:
+        raise HTTPException(status_code=400, detail="Please provide a valid direct video URL.")
+
+    parsed = urlparse(source_url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Use a secure HTTPS direct video-file URL.")
+
+    host = parsed.hostname.lower()
+    if host == "youtube.com" or host.endswith(".youtube.com") or host == "youtu.be":
+        raise HTTPException(status_code=422, detail="A YouTube watch link is a video page, not a direct video file. Use an authorized direct MP4/MOV URL or upload the original video.")
+
+    try:
+        addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
+            raise ValueError("Non-public host")
+    except Exception:
+        raise HTTPException(status_code=400, detail="This video URL host is not publicly accessible.")
+
+    suffix = Path(unquote(parsed.path)).suffix.lower()
+    if suffix not in {".mp4", ".mov", ".m4v"}:
+        raise HTTPException(status_code=400, detail="The direct URL must end in .mp4, .mov, or .m4v.")
+
+    max_upload_mb = int(os.getenv("MAX_UPLOAD_MB", "150"))
+    max_upload_bytes = max_upload_mb * 1024 * 1024
+    job_id = uuid4().hex[:12]
+    saved_path = UPLOAD_DIR / f"{job_id}{suffix}"
+    total_bytes = 0
+
+    try:
+        with requests.get(source_url, stream=True, allow_redirects=False, timeout=(10, 30)) as response:
+            if response.status_code in (301, 302, 303, 307, 308):
+                raise HTTPException(status_code=400, detail="Redirected URLs are not supported. Use the final direct file URL.")
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "").split(";")[0].lower()
+            if not (content_type.startswith("video/") or content_type == "application/octet-stream"):
+                raise HTTPException(status_code=415, detail="The URL did not return a recognized video file.")
+            declared_size = response.headers.get("content-length")
+            if declared_size and int(declared_size) > max_upload_bytes:
+                raise HTTPException(status_code=413, detail=f"Video exceeds the {max_upload_mb} MB import limit.")
+            with saved_path.open("wb") as buffer:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if not chunk:
+                        continue
+                    total_bytes += len(chunk)
+                    if total_bytes > max_upload_bytes:
+                        raise HTTPException(status_code=413, detail=f"Video exceeds the {max_upload_mb} MB import limit.")
+                    buffer.write(chunk)
+        if total_bytes == 0:
+            raise HTTPException(status_code=400, detail="The video URL returned an empty file.")
+        probe_duration(saved_path)
+    except HTTPException:
+        saved_path.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        saved_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Could not import this video URL: {exc}")
+
+    JOBS[job_id] = {
+        "job_id": job_id,
+        "status": "uploaded",
+        "progress": 0,
+        "filename": saved_path.name,
+        "message": "Direct video import complete. Ready to generate.",
+    }
+    return JOBS[job_id]
+
+
 @app.post("/api/upload")
 async def upload_video(file: UploadFile = File(...)):
     allowed_extensions = {".mp4", ".mov", ".m4v"}
