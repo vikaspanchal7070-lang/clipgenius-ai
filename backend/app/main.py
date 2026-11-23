@@ -65,7 +65,6 @@ def choose_language(preference: str, detected: str | None) -> str | None:
     return None
 
 def transcribe(path: Path, preference: str):
-def transcribe(path: Path, preference: str):
     model = get_whisper_model()
     lang = choose_language(preference, None)
 
