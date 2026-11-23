@@ -432,6 +432,152 @@ def homepage():
     return FileResponse(index_file)
 
 
+@app.post("/api/opus/projects")
+def create_opus_project(payload: dict[str, Any]):
+    """Submit a supported public video URL to the configured OpusClip API."""
+    import requests
+    from urllib.parse import urlparse
+
+    api_key = os.getenv("OPUSCLIP_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="YouTube link processing is not connected yet. Add OPUSCLIP_API_KEY in Render Environment settings."
+        )
+
+    video_url = str(payload.get("url", "")).strip()
+    if not video_url or len(video_url) > 2048:
+        raise HTTPException(status_code=400, detail="Paste a valid video URL.")
+
+    parsed = urlparse(video_url)
+    if parsed.scheme not in ("https", "http") or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Please use a valid HTTPS video link.")
+
+    host = parsed.hostname.lower()
+    is_youtube = (
+        host == "youtu.be"
+        or host == "youtube.com"
+        or host.endswith(".youtube.com")
+        or host == "youtube-nocookie.com"
+        or host.endswith(".youtube-nocookie.com")
+    )
+    if not is_youtube:
+        raise HTTPException(status_code=400, detail="This integration currently accepts YouTube video links only.")
+
+    duration = int(payload.get("duration", 30))
+    duration_ranges = {
+        15: [[0, 30]],
+        30: [[0, 30]],
+        45: [[30, 60]],
+        60: [[30, 60]],
+        90: [[60, 90]],
+    }
+    if duration not in duration_ranges:
+        duration = 30
+
+    language = str(payload.get("language", "auto"))
+    if language not in ("auto", "hi", "en"):
+        language = "auto"
+
+    request_body = {
+        "videoUrl": video_url,
+        "curationPref": {
+            "clipDurations": duration_ranges[duration],
+            "genre": "Auto",
+        },
+        "importPref": {"sourceLang": language},
+        "renderPref": {
+            "layoutAspectRatio": "portrait",
+            "enableCrop": True,
+            "enableCaption": True,
+            "enableUppercase": False,
+            "enableHighlight": True,
+            "enableEmoji": False,
+        },
+    }
+
+    try:
+        response = requests.post(
+            "https://api.opus.pro/api/clip-projects",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=request_body,
+            timeout=45,
+        )
+        try:
+            data = response.json()
+        except ValueError:
+            data = {"message": response.text[:500]}
+        if response.status_code >= 400:
+            detail = data.get("errorMessage") or data.get("message") or data.get("error") or f"OpusClip API returned HTTP {response.status_code}."
+            raise HTTPException(status_code=502, detail=str(detail)[:700])
+        project_id = data.get("projectId") or data.get("id") or (data.get("data") or {}).get("projectId") or (data.get("data") or {}).get("id")
+        if not project_id:
+            raise HTTPException(status_code=502, detail="OpusClip accepted an unexpected response. Please check API access and try again.")
+        return {
+            "project_id": project_id,
+            "stage": data.get("stage") or (data.get("data") or {}).get("stage") or "QUEUED",
+            "message": "Video submitted to the AI clipping service.",
+        }
+    except HTTPException:
+        raise
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach the AI clipping service: {exc}")
+
+
+@app.get("/api/opus/projects/{project_id}")
+def get_opus_project(project_id: str):
+    import requests
+    api_key = os.getenv("OPUSCLIP_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="OpusClip API key is not configured on the server.")
+    try:
+        response = requests.get(
+            f"https://api.opus.pro/api/clip-projects/{project_id}",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=30,
+        )
+        data = response.json()
+        if response.status_code >= 400:
+            detail = data.get("errorMessage") or data.get("message") or f"OpusClip API returned HTTP {response.status_code}."
+            raise HTTPException(status_code=502, detail=str(detail)[:700])
+        return data
+    except HTTPException:
+        raise
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Could not check AI project status: {exc}")
+
+
+@app.get("/api/opus/projects/{project_id}/clips")
+def get_opus_project_clips(project_id: str):
+    import requests
+    api_key = os.getenv("OPUSCLIP_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="OpusClip API key is not configured on the server.")
+    try:
+        response = requests.get(
+            "https://api.opus.pro/api/exportable-clips",
+            params={"q": "findByProjectId", "projectId": project_id, "pageNum": 1, "pageSize": 50},
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=30,
+        )
+        data = response.json()
+        if response.status_code >= 400:
+            detail = data.get("errorMessage") or data.get("message") or f"OpusClip API returned HTTP {response.status_code}."
+            raise HTTPException(status_code=502, detail=str(detail)[:700])
+        if isinstance(data, dict):
+            data = data.get("data", data.get("list", []))
+            if isinstance(data, dict):
+                data = data.get("list", [])
+        return {"clips": data if isinstance(data, list) else []}
+    except HTTPException:
+        raise
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Could not retrieve generated clips: {exc}")
+
+
 @app.post("/api/import-url")
 def import_video_url(payload: dict[str, str]):
     """Import a direct video file URL from an authorized source."""
