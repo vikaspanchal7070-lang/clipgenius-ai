@@ -165,59 +165,84 @@ HOOK_TERMS = {
 }
 
 
-def score_candidate(text: str, duration: float) -> float:
+def score_candidate(text: str, duration: float, segments=None) -> float:
+    """Heuristic highlight score using speech density, hooks and sentence cues."""
     words = re.findall(r"\w+", text.lower(), flags=re.UNICODE)
     if not words:
         return 0.0
 
-    score = min(len(words) / max(duration, 1) * 8, 10)
-    score += min(sum(1 for word in words if word in HOOK_TERMS) * 1.8, 8)
-    score += 2.0 if "?" in text or "？" in text else 0
-    score += 1.5 if "!" in text else 0
-    score += 1.0 if len(text) > 100 else 0
+    unique_ratio = len(set(words)) / max(len(words), 1)
+    speech_rate = len(words) / max(duration, 1)
+    hook_hits = sum(1 for word in words if word in HOOK_TERMS)
+    score = min(speech_rate * 1.25, 12.0)
+    score += min(hook_hits * 2.0, 10.0)
+    score += 2.5 if "?" in text or "？" in text else 0.0
+    score += 1.5 if "!" in text or "！" in text else 0.0
+    score += 1.0 if len(words) >= 18 else 0.0
+    score += min(unique_ratio * 2.0, 2.0)
+
+    if segments:
+        pauses = sum(
+            1 for left, right in zip(segments, segments[1:])
+            if 0 <= right["start"] - left["end"] <= 0.8
+        )
+        score += min(pauses * 0.15, 1.5)
+
     return round(score, 2)
 
 
 def build_candidates(segments, total_duration: float, requested_duration: int):
+    """Score overlapping time windows, then keep the strongest non-overlapping moments."""
     target = min(float(requested_duration), total_duration)
+    if target < 8:
+        return []
+
+    stride = max(3.0, min(6.0, target / 5.0))
+    starts = []
+    cursor = 0.0
+    while cursor + min(target, total_duration) <= total_duration + 0.01:
+        starts.append(cursor)
+        cursor += stride
+    final_start = max(0.0, total_duration - target)
+    if not starts or abs(starts[-1] - final_start) > 1.0:
+        starts.append(final_start)
+
     candidates = []
-
-    for seg in segments:
-        start = max(0.0, seg["start"] - 1.0)
+    for start in starts:
         end = min(total_duration, start + target)
-
-        if end - start < min(8.0, target * 0.5):
-            continue
-
         selected = [
             item for item in segments
             if item["end"] > start and item["start"] < end
         ]
         text = " ".join(item["text"] for item in selected)
-        if not text.strip():
+        if not text.strip() or len(re.findall(r"\w+", text, flags=re.UNICODE)) < 5:
             continue
 
-        candidates.append(
-            {
-                "start": start,
-                "end": end,
-                "text": text,
-                "score": score_candidate(text, end - start),
-            }
-        )
+        # Trim quiet leading/trailing space while preserving a little context.
+        first_speech = min(item["start"] for item in selected)
+        last_speech = max(item["end"] for item in selected)
+        clip_start = max(0.0, min(start + 1.0, first_speech - 0.6))
+        clip_end = min(total_duration, max(end - 1.0, last_speech + 0.8))
+        if clip_end - clip_start < min(8.0, target * 0.5):
+            clip_start, clip_end = start, end
+
+        candidates.append({
+            "start": clip_start,
+            "end": clip_end,
+            "text": text,
+            "score": score_candidate(text, clip_end - clip_start, selected),
+        })
 
     candidates.sort(key=lambda item: item["score"], reverse=True)
-
     picked = []
     for item in candidates:
-        no_near_duplicate = all(
-            item["end"] <= previous["start"] + 4
-            or item["start"] >= previous["end"] - 4
+        if all(
+            item["end"] <= previous["start"] + 3
+            or item["start"] >= previous["end"] - 3
             for previous in picked
-        )
-        if no_near_duplicate:
+        ):
             picked.append(item)
-        if len(picked) >= 20:
+        if len(picked) >= 10:
             break
 
     return picked
@@ -232,6 +257,7 @@ def srt_time(seconds: float) -> str:
 
 
 def write_srt(segments, start: float, end: float, target: Path):
+    """Create readable, short caption cards with approximate phrase timing."""
     lines = []
     index = 1
 
@@ -245,15 +271,38 @@ def write_srt(segments, start: float, end: float, target: Path):
         if not caption:
             continue
 
-        lines.extend(
-            [
+        tokens = caption.split()
+        chunks = []
+        current = []
+        current_len = 0
+        for token in tokens:
+            extra = len(token) + (1 if current else 0)
+            if current and (len(current) >= 6 or current_len + extra > 34):
+                chunks.append(" ".join(current))
+                current = [token]
+                current_len = len(token)
+            else:
+                current.append(token)
+                current_len += extra
+        if current:
+            chunks.append(" ".join(current))
+
+        weights = [max(len(chunk), 1) for chunk in chunks]
+        total_weight = sum(weights)
+        span = clip_end - clip_start
+        elapsed = 0.0
+        for chunk, weight in zip(chunks, weights):
+            phrase_duration = span * weight / total_weight
+            phrase_start = clip_start + elapsed
+            phrase_end = min(clip_end, phrase_start + phrase_duration)
+            lines.extend([
                 str(index),
-                f"{srt_time(clip_start - start)} --> {srt_time(clip_end - start)}",
-                caption,
+                f"{srt_time(phrase_start - start)} --> {srt_time(phrase_end - start)}",
+                chunk,
                 "",
-            ]
-        )
-        index += 1
+            ])
+            elapsed += phrase_duration
+            index += 1
 
     target.write_text("\n".join(lines), encoding="utf-8-sig")
 
@@ -569,10 +618,10 @@ def generate(
     if job_id not in JOBS:
         raise HTTPException(status_code=404, detail="Job not found.")
 
-    if count < 1 or count > 20:
+    if count < 5 or count > 10:
         raise HTTPException(
             status_code=400,
-            detail="Short count must be between 1 and 20.",
+            detail="Choose between 5 and 10 shorts.",
         )
 
     if duration not in (15, 30, 45, 60, 90):
