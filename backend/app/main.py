@@ -360,69 +360,6 @@ def escape_filter_path(path: Path) -> str:
 
 
 
-def face_reframe_crop_x(source: Path, start: float, end: float) -> int | None:
-    """
-    Estimate a stable horizontal crop from a few low-resolution face samples.
-    Returns an FFmpeg crop x-coordinate, or None when no reliable face is found.
-    """
-    try:
-        import cv2
-        import statistics
-
-        capture = cv2.VideoCapture(str(source))
-        if not capture.isOpened():
-            return None
-
-        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        if width <= 0 or height <= 0 or width / height <= 9 / 16:
-            capture.release()
-            return None
-
-        classifier = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        )
-        if classifier.empty():
-            capture.release()
-            return None
-
-        sample_count = min(12, max(3, int((end - start) / 1.5) + 1))
-        positions = []
-        for sample_index in range(sample_count):
-            timestamp = start + (end - start) * sample_index / max(sample_count - 1, 1)
-            capture.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000)
-            ok, frame = capture.read()
-            if not ok or frame is None:
-                continue
-
-            small_width = 320
-            small_height = max(1, int(frame.shape[0] * small_width / frame.shape[1]))
-            small = cv2.resize(frame, (small_width, small_height))
-            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-            faces = classifier.detectMultiScale(
-                gray, scaleFactor=1.12, minNeighbors=5, minSize=(24, 24)
-            )
-            if len(faces):
-                # Use the largest face in each sampled frame to avoid background faces.
-                x, y, face_width, face_height = max(
-                    faces, key=lambda face: face[2] * face[3]
-                )
-                positions.append((x + face_width / 2) / small_width)
-
-        capture.release()
-        if not positions:
-            return None
-
-        face_center_ratio = statistics.median(positions)
-        scaled_width = max(1080, int(1920 * width / height))
-        max_crop_x = max(0, scaled_width - 1080)
-        crop_x = int(face_center_ratio * scaled_width - 540)
-        return max(0, min(max_crop_x, crop_x))
-    except Exception:
-        # Face detection is an enhancement; never fail a clip because of it.
-        return None
-
-
 def render_clip(
     source: Path,
     job_dir: Path,
@@ -445,13 +382,11 @@ def render_clip(
         "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
         "BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=100'"
     )
-    crop_x = face_reframe_crop_x(source, start, end)
-    if crop_x is None:
-        crop_x = "(in_w-1080)/2"
-
+    # Keep rendering stable on the 512 MB free instance.
+    # Face-aware sampling is deferred until sufficient memory is available.
     video_filter = (
         "scale=1080:1920:force_original_aspect_ratio=increase,"
-        f"crop=1080:1920:{crop_x}:0,{subtitle_filter}"
+        f"crop=1080:1920,{subtitle_filter}"
     )
 
     command = [
@@ -481,7 +416,7 @@ def render_clip(
         "start_seconds": round(start, 1),
         "duration_seconds": round(end - start, 1),
         "score": candidate["score"],
-        "framing_mode": "face-aware" if isinstance(crop_x, int) else "center-fallback",
+        "framing_mode": "center-crop",
         "transcript_preview": candidate["text"][:180],
     }
 
@@ -555,8 +490,7 @@ def process_job(job_id: str, count: int, duration: int, language: str):
             clips=results,
             note=(
                 "Clips are ranked using transcript-based heuristics. "
-                "Portrait framing uses sampled face positions when detected, "
-                "with center-crop fallback when no face is found. "
+                "Portrait framing currently uses a stable center crop. "
                 "Virality is not guaranteed. Hinglish transcription quality "
                 "depends on the speech and Whisper model."
             ),
