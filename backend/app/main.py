@@ -51,7 +51,6 @@ if NEXT_ASSETS_DIR.exists():
 # -------------------------------------------------------------------
 
 JOBS: dict[str, dict[str, Any]] = {}
-MODEL = None
 MODEL_LOCK = threading.Lock()
 
 
@@ -60,29 +59,6 @@ def get_binary(name: str) -> str:
     if not path:
         raise RuntimeError(f"{name} is not installed or not available on PATH.")
     return path
-
-
-def get_whisper_model():
-    """Load the small Whisper model once per running process."""
-    global MODEL
-    with MODEL_LOCK:
-        if MODEL is None:
-            from faster_whisper import WhisperModel
-
-            model_name = os.getenv("WHISPER_MODEL", "tiny")
-            device = os.getenv("WHISPER_DEVICE", "cpu")
-            compute = os.getenv(
-                "WHISPER_COMPUTE_TYPE",
-                "int8" if device == "cpu" else "float16",
-            )
-            MODEL = WhisperModel(
-                model_name,
-                device=device,
-                compute_type=compute,
-                cpu_threads=1,
-                num_workers=1,
-            )
-    return MODEL
 
 
 # -------------------------------------------------------------------
@@ -124,54 +100,87 @@ def choose_language(preference: str) -> str | None:
 
 def transcribe(path: Path, preference: str):
     """
-    Transcribe without word-level timestamps to reduce processing overhead.
-    This is a lighter configuration for small-memory hosting.
+    Run whisper.cpp with a quantized tiny model. Audio is extracted to a
+    temporary mono 16 kHz WAV so the native recognizer does not load video.
     """
-    model = get_whisper_model()
-    language = choose_language(preference)
+    import tempfile
 
-    segments_iter, info = model.transcribe(
-        str(path),
-        language=language,
-        task="transcribe",
-        vad_filter=True,
-        word_timestamps=True,
-        beam_size=1,
-        condition_on_previous_text=False,
-    )
+    whisper_cli = get_binary("whisper-cli")
+    model_path = Path(os.getenv("WHISPER_CPP_MODEL", "/opt/whisper-model/ggml-tiny-q5_1.bin"))
+    if not model_path.is_file():
+        raise RuntimeError("Quantized Whisper model is missing from the deployment.")
 
-    segments = []
-    for seg in segments_iter:
-        text = clean_caption(seg.text)
-        if text:
-            segments.append(
-                {
-                    "start": float(seg.start),
-                    "end": float(seg.end),
-                    "text": text,
-                    "words": [
-                        {
-                            "start": float(word.start),
-                            "end": float(word.end),
-                            "text": clean_caption(word.word),
-                        }
-                        for word in (seg.words or [])
-                        if word.start is not None and word.end is not None
-                    ],
-                }
-            )
+    language = choose_language(preference) or "auto"
+    with tempfile.TemporaryDirectory(prefix="clipgenius-audio-") as temp_dir:
+        temp_path = Path(temp_dir)
+        audio_path = temp_path / "audio.wav"
+        output_prefix = temp_path / "transcript"
 
-    detected_language = getattr(info, "language", "unknown")
-    return segments, detected_language
+        extract = subprocess.run(
+            [
+                get_binary("ffmpeg"), "-y", "-i", str(path), "-vn",
+                "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+                str(audio_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if extract.returncode != 0:
+            raise RuntimeError(f"Audio extraction failed: {extract.stderr[-1200:]}")
 
+        command = [
+            whisper_cli,
+            "-m", str(model_path),
+            "-f", str(audio_path),
+            "-l", language,
+            "-osrt",
+            "-of", str(output_prefix),
+            "-t", "1",
+            "-bs", "1",
+            "-bo", "1",
+            "-np",
+        ]
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"whisper.cpp transcription failed: {result.stderr[-1600:]}")
 
-def release_whisper_model():
-    """Release the cached Whisper model before FFmpeg rendering on low-memory hosts."""
-    global MODEL
-    with MODEL_LOCK:
-        MODEL = None
-    import gc
-    gc.collect()
+        srt_path = output_prefix.with_suffix(".srt")
+        if not srt_path.exists():
+            raise RuntimeError("whisper.cpp did not produce subtitle timestamps.")
+
+        srt_text = srt_path.read_text(encoding="utf-8", errors="replace")
+        blocks = re.split(r"\\n\\s*\\n", srt_text.strip())
+        segments = []
+        timestamp_pattern = re.compile(
+            r"(\\d{2}:\\d{2}:\\d{2},\\d{3})\\s*-->\\s*(\\d{2}:\\d{2}:\\d{2},\\d{3})"
+        )
+
+        def parse_time(value: str) -> float:
+            hours, minutes, rest = value.split(":")
+            seconds, millis = rest.split(",")
+            return int(hours) * 3600 + int(minutes) * 60 + int(seconds) + int(millis) / 1000
+
+        for block in blocks:
+            lines = [line.strip() for line in block.splitlines() if line.strip()]
+            timing_index = next((i for i, line in enumerate(lines) if timestamp_pattern.search(line)), None)
+            if timing_index is None:
+                continue
+            match = timestamp_pattern.search(lines[timing_index])
+            text = clean_caption(" ".join(lines[timing_index + 1:]))
+            if not text:
+                continue
+            segments.append({
+                "start": parse_time(match.group(1)),
+                "end": parse_time(match.group(2)),
+                "text": text,
+                "words": [],
+            })
+
+        detected_language = language
+        if language == "auto":
+            detected = re.search(r"auto-detected language:\\s*([^\\r\\n]+)", result.stderr + "\\n" + result.stdout, re.IGNORECASE)
+            detected_language = detected.group(1).strip() if detected else "auto"
+        return segments, detected_language
 
 
 HOOK_TERMS = {
@@ -456,9 +465,6 @@ def process_job(job_id: str, count: int, duration: int, language: str):
 
         total_duration = probe_duration(source)
         segments, detected = transcribe(source, language)
-        # Whisper is no longer needed once transcript timestamps are in memory.
-        # Free its native model allocations before launching FFmpeg.
-        release_whisper_model()
 
         if not segments:
             raise RuntimeError(
@@ -526,7 +532,7 @@ def health():
     return {
         "status": "ok",
         "app": "ClipGenius AI",
-        "engine": "FFmpeg + faster-whisper",
+        "engine": "whisper.cpp (quantized tiny) + FFmpeg",
     }
 
 
