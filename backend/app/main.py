@@ -142,7 +142,13 @@ def transcribe(path: Path, preference: str):
         ]
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
-            raise RuntimeError(f"whisper.cpp transcription failed: {result.stderr[-1600:]}")
+            diagnostic = (result.stderr or "").strip() or (result.stdout or "").strip()
+            if not diagnostic:
+                diagnostic = "whisper-cli exited without writing diagnostic output."
+            raise RuntimeError(
+                f"whisper.cpp transcription failed (exit code {result.returncode}): "
+                f"{diagnostic[-2400:]}"
+            )
 
         srt_path = output_prefix.with_suffix(".srt")
         if not srt_path.exists():
