@@ -149,10 +149,10 @@ def transcribe(path: Path, preference: str):
             raise RuntimeError("whisper.cpp did not produce subtitle timestamps.")
 
         srt_text = srt_path.read_text(encoding="utf-8", errors="replace")
-        blocks = re.split(r"\\n\\s*\\n", srt_text.strip())
+        blocks = re.split(r"\n\s*\n", srt_text.strip())
         segments = []
         timestamp_pattern = re.compile(
-            r"(\\d{2}:\\d{2}:\\d{2},\\d{3})\\s*-->\\s*(\\d{2}:\\d{2}:\\d{2},\\d{3})"
+            r"(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})"
         )
 
         def parse_time(value: str) -> float:
@@ -178,7 +178,7 @@ def transcribe(path: Path, preference: str):
 
         detected_language = language
         if language == "auto":
-            detected = re.search(r"auto-detected language:\\s*([^\\r\\n]+)", result.stderr + "\\n" + result.stdout, re.IGNORECASE)
+            detected = re.search(r"auto-detected language:\s*([^\r\n]+)", result.stderr + "\n" + result.stdout, re.IGNORECASE)
             detected_language = detected.group(1).strip() if detected else "auto"
         return segments, detected_language
 
